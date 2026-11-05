@@ -75,6 +75,13 @@ rest lives in the module:
 The full rationale, with exact FreeBSD and Haiku source references, is in the
 **[research report](docs/research-report.md)** — the heart of this repository.
 
+For the longer-term direction — how the Linux ABI layer could share
+infrastructure with a [pkgsrc](https://www.pkgsrc.org/)-inspired software
+portability framework, so building and running foreign software become one
+system — see **[docs/portability-vision.md](docs/portability-vision.md)**. It is a
+complementary track, downstream of the runtime work, not a change to the plan
+above.
+
 ## Repository layout
 
 ```

@@ -1,0 +1,7 @@
+# program|arguments|exit status|stdout (\n between lines, empty for none)
+hello||42|hello
+ebadf||9|
+enosys||38|
+exit||7|
+xmm||0|x
+args|a b|0|a\nb

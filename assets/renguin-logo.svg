@@ -1,0 +1,77 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Renguin logo: an ink-brush penguin within an old-pond circle">
+  <title>Renguin</title>
+  <defs>
+    <radialGradient id="pond" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#1b2a36"/>
+      <stop offset="70%" stop-color="#132029"/>
+      <stop offset="100%" stop-color="#0c161d"/>
+    </radialGradient>
+    <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e7eef2"/>
+    </linearGradient>
+    <linearGradient id="ensoStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7c948"/>
+      <stop offset="55%" stop-color="#f0b429"/>
+      <stop offset="100%" stop-color="#de911d"/>
+    </linearGradient>
+  </defs>
+
+  <!-- still water of the old pond -->
+  <circle cx="256" cy="256" r="236" fill="url(#pond)"/>
+
+  <!-- ensō: the old pond drawn in one Haiku-yellow brushstroke -->
+  <path d="M256 44
+           a212 212 0 1 0 150 62"
+        fill="none" stroke="url(#ensoStroke)" stroke-width="20"
+        stroke-linecap="round"/>
+
+  <!-- 5-7-5: three reed strokes rising from the water (a haiku, counted) -->
+  <g stroke="#f0b429" stroke-width="7" stroke-linecap="round" opacity="0.5">
+    <line x1="150" y1="372" x2="150" y2="330"/>
+    <line x1="168" y1="372" x2="168" y2="316"/>
+    <line x1="186" y1="372" x2="186" y2="338"/>
+  </g>
+
+  <!-- the penguin: an original mark built from a few ink strokes,
+       a standing stone-and-snow bird, not any existing mascot -->
+  <g>
+    <!-- body / back: sumi-e ink -->
+    <path d="M256 150
+             c-52 0 -86 42 -86 104
+             c0 46 10 86 24 116
+             c8 18 26 30 62 30
+             c36 0 54 -12 62 -30
+             c14 -30 24 -70 24 -116
+             c0 -62 -34 -104 -86 -104 z"
+          fill="#12212b"/>
+    <!-- white front -->
+    <path d="M256 196
+             c-30 0 -46 26 -46 70
+             c0 40 8 76 18 100
+             c5 12 14 18 28 18
+             c14 0 23 -6 28 -18
+             c10 -24 18 -60 18 -100
+             c0 -44 -16 -70 -46 -70 z"
+          fill="url(#belly)"/>
+    <!-- beak: a single orange stroke -->
+    <path d="M256 196 l-20 16 l20 10 l20 -10 z" fill="#f0932b"/>
+    <!-- eyes: two still points -->
+    <circle cx="238" cy="188" r="6.5" fill="#0c161d"/>
+    <circle cx="274" cy="188" r="6.5" fill="#0c161d"/>
+    <!-- feet in the Haiku yellow of the pond's light -->
+    <path d="M232 396 q-16 10 -26 8 q10 10 30 6 z" fill="#f0932b"/>
+    <path d="M280 396 q16 10 26 8 q-10 10 -30 6 z" fill="#f0932b"/>
+  </g>
+
+  <!-- the frog's ripple: one concentric ring where something entered -->
+  <circle cx="340" cy="368" r="20" fill="none" stroke="#2b4250" stroke-width="3" opacity="0.8"/>
+  <circle cx="340" cy="368" r="34" fill="none" stroke="#223642" stroke-width="2" opacity="0.6"/>
+
+  <!-- poet's seal (hanko): the mark of authorship -->
+  <g transform="translate(356,150)">
+    <rect x="-22" y="-22" width="44" height="44" rx="8" fill="#c0392b"/>
+    <text x="0" y="7" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+          font-size="20" font-weight="700" fill="#fff">R</text>
+  </g>
+</svg>

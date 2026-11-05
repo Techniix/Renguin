@@ -1,0 +1,10 @@
+# Built test binaries (regenerate with tests/linux/poc/Makefile)
+tests/linux/poc/hello
+tests/linux/poc/ebadf
+tests/linux/poc/enosys
+tests/linux/poc/exit
+tests/linux/poc/xmm
+tests/linux/poc/args
+# Built tools
+tools/renguin-brand/renguin-brand
+*.o

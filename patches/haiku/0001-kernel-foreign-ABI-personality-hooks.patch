@@ -1,0 +1,583 @@
+diff --git a/headers/private/kernel/foreign_personality.h b/headers/private/kernel/foreign_personality.h
+new file mode 100644
+index 0000000..7f1c388
+--- /dev/null
++++ b/headers/private/kernel/foreign_personality.h
+@@ -0,0 +1,115 @@
++/*
++ * Copyright 2026, Renguin contributors.
++ * Distributed under the terms of the MIT License.
++ */
++#ifndef _KERNEL_FOREIGN_PERSONALITY_H
++#define _KERNEL_FOREIGN_PERSONALITY_H
++
++
++/*!	Foreign ABI personalities.
++
++	A personality lets a kernel module run executables of another operating
++	system's ABI (for example Linux) directly, without runtime_loader. When a
++	team is about to start a new program, the kernel asks every personality
++	module whether it claims the executable. The claiming module maps the
++	image, builds the initial user stack in its own ABI's format and enters
++	userland. From then on, every system call made by a thread of that team
++	is passed to the module instead of Haiku's own system call table.
++
++	Native Haiku teams never take any of these paths.
++
++	Personality modules are found under the "personalities" module prefix and
++	stay loaded once they have been found.
++*/
++
++
++#include <module.h>
++#include <thread_types.h>
++
++
++#define FOREIGN_PERSONALITY_MODULE_PREFIX	"personalities"
++
++#define FOREIGN_PERSONALITY_HEADER_SIZE		64
++	// bytes of the executable passed to probe(); enough for an ELF64 header
++
++
++struct iframe;
++
++
++struct foreign_exec_args {
++	Team*			team;
++	Thread*			thread;			// the team's main thread (the caller)
++	const char*		path;
++	char* const*	flat_args;		// kernel copy: arguments, NULL,
++									// environment, NULL, then the strings
++	uint32			arg_count;
++	uint32			env_count;
++	mode_t			umask;
++	uint32			flags;			// TEAM_ARGS_FLAG_*
++	int				fd;				// executable, opened read-only by the
++									// kernel, closed by the kernel
++	const uint8*	header;			// first bytes of the executable
++	size_t			header_size;
++
++	// set by load()
++	addr_t			entry;
++	addr_t			stack_pointer;
++};
++
++
++typedef struct foreign_personality_module_info {
++	module_info		info;
++
++	const char*		abi_name;
++		// short name used in log messages, e.g. "linux"
++
++	status_t		(*probe)(const struct foreign_exec_args* args);
++		// Returns B_OK if the personality claims the executable. Must not
++		// change any state.
++
++	status_t		(*load)(struct foreign_exec_args* args);
++		// Called after a successful probe() from the new team's main thread.
++		// The team's old address space contents are already gone. Maps the
++		// image, builds the initial user stack and sets entry and
++		// stack_pointer.
++
++	status_t		(*enter_userspace)(Thread* thread, addr_t entry,
++						addr_t stackPointer);
++		// Enters userland with the ABI's initial register state. Does not
++		// return on success.
++
++	void			(*syscall)(struct iframe* frame);
++		// Handles a system call of a thread of a team using this
++		// personality. The call number and arguments are read from the
++		// frame and the result is stored in it.
++
++	void			(*team_released)(Team* team);
++		// The team stops using this personality: it executes a native
++		// program, or it is being deleted. May be NULL.
++} foreign_personality_module_info;
++
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++status_t	foreign_personality_exec(Team* team, Thread* thread,
++				const char* path, char* const* flatArgs, uint32 argCount,
++				uint32 envCount, mode_t umask, uint32 flags,
++				const foreign_personality_module_info** _personality,
++				addr_t* _entry, addr_t* _stackPointer);
++	// B_OK: a personality claimed and loaded the executable.
++	// B_NOT_SUPPORTED: no personality claimed it; continue natively.
++	// Other errors: a personality claimed it but loading failed.
++
++void		foreign_personality_team_released(Team* team);
++
++void		foreign_personality_syscall(struct iframe* frame);
++	// called from the architecture's system call entry
++
++#ifdef __cplusplus
++}
++#endif
++
++
++#endif	/* _KERNEL_FOREIGN_PERSONALITY_H */
+diff --git a/headers/private/kernel/thread_types.h b/headers/private/kernel/thread_types.h
+index 8a59504..2c5ab84 100644
+--- a/headers/private/kernel/thread_types.h
++++ b/headers/private/kernel/thread_types.h
+@@ -60,6 +60,7 @@ typedef enum job_control_state {
+ 
+ struct cpu_ent;
+ struct image;					// defined in image.c
++struct foreign_personality_module_info;	// defined in foreign_personality.h
+ struct io_context;
+ struct realtime_sem_context;	// defined in realtime_sem.cpp
+ struct select_info;
+@@ -314,6 +315,8 @@ struct Thread : TeamThreadIteratorEntry<thread_id>, KernelReferenceable {
+ 
+ 	addr_t			user_local_storage;
+ 		// usually allocated at the safe side of the stack
++	void*			personality_data;
++		// owned by the team's foreign ABI personality, if any
+ 	int				kernel_errno;
+ 		// kernel "errno" differs from its userspace alter ego
+ 
+@@ -485,6 +488,12 @@ struct Team : TeamThreadIteratorEntry<team_id>, KernelReferenceable,
+ 
+ 	void*			commpage_address;
+ 
++	const ::foreign_personality_module_info* personality;
++		// foreign ABI personality, NULL for native teams. Only changed by the
++		// team's main thread while it starts a new program, and on deletion.
++	void*			personality_data;
++		// owned by the personality
++
+ 	struct team_debug_info debug_info;
+ 
+ 	bigtime_t		start_time;
+@@ -864,5 +873,8 @@ using BKernel::ProcessGroupList;
+ #endif
+ #define	THREAD_FLAGS_OLD_SIGMASK			0x4000
+ 	// the thread has an old sigmask to be restored
++#define	THREAD_FLAGS_FOREIGN_ABI			0x8000
++	// the thread's team runs a foreign ABI personality; its system calls go
++	// to the personality (see foreign_personality.h)
+ 
+ #endif	/* _KERNEL_THREAD_TYPES_H */
+diff --git a/src/add-ons/kernel/Jamfile b/src/add-ons/kernel/Jamfile
+index 1179d0d..2b031a6 100644
+--- a/src/add-ons/kernel/Jamfile
++++ b/src/add-ons/kernel/Jamfile
+@@ -11,6 +11,7 @@ SubInclude HAIKU_TOP src add-ons kernel file_systems ;
+ SubInclude HAIKU_TOP src add-ons kernel interrupt_controllers ;
+ SubInclude HAIKU_TOP src add-ons kernel network ;
+ SubInclude HAIKU_TOP src add-ons kernel partitioning_systems ;
++SubInclude HAIKU_TOP src add-ons kernel personalities ;
+ SubInclude HAIKU_TOP src add-ons kernel generic ;
+ SubInclude HAIKU_TOP src add-ons kernel bluetooth ;
+ SubInclude HAIKU_TOP src add-ons kernel power ;
+diff --git a/src/system/kernel/Jamfile b/src/system/kernel/Jamfile
+index 6a31c53..cf275cb 100644
+--- a/src/system/kernel/Jamfile
++++ b/src/system/kernel/Jamfile
+@@ -48,6 +48,7 @@ KernelMergeObject kernel_core.o :
+ 	system_info.cpp
+ 	smp.cpp
+ 	syscalls.cpp
++	foreign_personality.cpp
+ 	team.cpp
+ 	thread.cpp
+ 	timer.cpp
+diff --git a/src/system/kernel/arch/x86/64/interrupts.S b/src/system/kernel/arch/x86/64/interrupts.S
+index d7b666c..64186ac 100644
+--- a/src/system/kernel/arch/x86/64/interrupts.S
++++ b/src/system/kernel/arch/x86/64/interrupts.S
+@@ -393,6 +393,11 @@ FUNCTION(x86_64_syscall_entry):
+ 	movq	%rax, %r14
+ 	movq	%gs:0, %r12
+ 
++	// Threads of foreign ABI teams (see foreign_personality.h) take their own
++	// path, before any C code can touch the FPU registers.
++	testl	$THREAD_FLAGS_FOREIGN_ABI, THREAD_flags(%r12)
++	jnz		.Lforeign_syscall
++
+ 	STOP_USER_DEBUGGING()
+ 	UPDATE_THREAD_USER_TIME()
+ 
+@@ -564,6 +569,55 @@ FUNCTION(x86_64_syscall_entry):
+ 	call	thread_at_kernel_exit
+ 	jmp		.Lpost_syscall_work_done
+ 
++.Lforeign_syscall:
++	// Foreign ABIs such as Linux preserve the FPU and vector registers across
++	// the syscall instruction, but kernel code may use them. Save the user
++	// state as the user interrupt path does; it is restored on the way out
++	// via .Lrestore_fpu.
++	movl	(gXsaveMask), %eax
++	movl	(gXsaveMask+4), %edx
++	leaq	THREAD_user_fpu_state(%r12), %rdi
++	CODEPATCH_START
++	fxsaveq	(%rdi)
++	CODEPATCH_END(ALTCODEPATCH_TAG_XSAVE)
++	movq	%rdi, IFRAME_fpu(%rbp)
++
++	STOP_USER_DEBUGGING()
++	UPDATE_THREAD_USER_TIME()
++	sti
++
++	// The personality reads the call number and arguments from the iframe
++	// and stores the result in it.
++	movq	%rbp, %rdi
++	call	foreign_personality_syscall
++	movq	%rbp, %rsp
++
++	// The frame may have been changed (exec, signal return), so always take
++	// the IRET path. Native syscall debugging hooks are not used: they would
++	// interpret the call number as a Haiku one.
++	testl	$(THREAD_FLAGS_SIGNALS_PENDING | THREAD_FLAGS_DEBUG_THREAD \
++			| THREAD_FLAGS_TRAP_FOR_CORE_DUMP) \
++			, THREAD_flags(%r12)
++	jnz		1f
++	cli
++	call	thread_at_kernel_exit_no_signals
++	jmp		2f
++1:
++	// thread_at_kernel_exit() disables interrupts itself.
++	call	thread_at_kernel_exit
++2:
++	testl	$THREAD_FLAGS_RESTART_SYSCALL, THREAD_flags(%r12)
++	jz		3f
++	movq	%rbp, %rdi
++	call	x86_restart_syscall
++3:
++	testl	$THREAD_FLAGS_BREAKPOINTS_DEFINED, THREAD_flags(%r12)
++	jz		4f
++	movq	%rbp, %rdi
++	call	x86_init_user_debug_at_kernel_exit
++4:
++	jmp		.Lrestore_fpu
++
+ .Lsyscall_stack_args:
+ 	// Some arguments are on the stack, work out what we need to copy. 6
+ 	// arguments (48 bytes) are already in registers.
+diff --git a/src/system/kernel/arch/x86/arch_thread.cpp b/src/system/kernel/arch/x86/arch_thread.cpp
+index ba531e0..f605769 100644
+--- a/src/system/kernel/arch/x86/arch_thread.cpp
++++ b/src/system/kernel/arch/x86/arch_thread.cpp
+@@ -201,8 +201,10 @@ arch_thread_context_switch(Thread* from, Thread* to)
+ 	x86_set_syscall_stack(to->kernel_stack_top);
+ 
+ 	// set TLS GDT entry to the current thread - since this action is
+-	// dependent on the current CPU, we have to do it here
+-	if (to->user_local_storage != 0)
++	// dependent on the current CPU, we have to do it here. Threads of foreign
++	// ABI teams manage their TLS base themselves, and it may well be 0.
++	if (to->user_local_storage != 0
++		|| (to->flags & THREAD_FLAGS_FOREIGN_ABI) != 0)
+ 		x86_set_tls_context(to);
+ 
+ 	X86PagingStructures* activePagingStructures
+diff --git a/src/system/kernel/foreign_personality.cpp b/src/system/kernel/foreign_personality.cpp
+new file mode 100644
+index 0000000..ab74796
+--- /dev/null
++++ b/src/system/kernel/foreign_personality.cpp
+@@ -0,0 +1,223 @@
++/*
++ * Copyright 2026, Renguin contributors.
++ * Distributed under the terms of the MIT License.
++ */
++
++
++/*!	Registry and dispatch for foreign ABI personalities.
++	See headers/private/kernel/foreign_personality.h.
++*/
++
++
++#include <foreign_personality.h>
++
++#include <fcntl.h>
++#include <string.h>
++
++#include <AutoDeleter.h>
++
++#include <kernel.h>
++#include <lock.h>
++#include <syscalls.h>
++#include <thread.h>
++#include <util/AutoLock.h>
++
++
++//#define TRACE_FOREIGN_PERSONALITY
++#ifdef TRACE_FOREIGN_PERSONALITY
++#	define TRACE(x...) dprintf("foreign personality: " x)
++#else
++#	define TRACE(x...) ;
++#endif
++
++
++static const int32 kMaxPersonalities = 8;
++static const bigtime_t kRescanInterval = 10000000LL;
++	// Look for newly installed personality modules at most this often.
++
++static mutex sLock = MUTEX_INITIALIZER("foreign personalities");
++static const foreign_personality_module_info*
++	sPersonalities[kMaxPersonalities];
++static int32 sPersonalityCount = 0;
++static bigtime_t sLastScan = -1;
++
++
++static bool
++is_personality_loaded_locked(const char* name)
++{
++	for (int32 i = 0; i < sPersonalityCount; i++) {
++		if (strcmp(sPersonalities[i]->info.name, name) == 0)
++			return true;
++	}
++	return false;
++}
++
++
++static void
++scan_personality_modules_locked()
++{
++	sLastScan = system_time();
++
++	void* cookie = open_module_list(FOREIGN_PERSONALITY_MODULE_PREFIX);
++	if (cookie == NULL)
++		return;
++
++	char name[B_FILE_NAME_LENGTH];
++	while (sPersonalityCount < kMaxPersonalities) {
++		size_t nameLength = sizeof(name);
++		if (read_next_module_name(cookie, name, &nameLength) != B_OK)
++			break;
++
++		if (is_personality_loaded_locked(name))
++			continue;
++
++		foreign_personality_module_info* module;
++		if (get_module(name, (module_info**)&module) != B_OK)
++			continue;
++
++		if (module->probe == NULL || module->load == NULL
++			|| module->enter_userspace == NULL || module->syscall == NULL) {
++			dprintf("foreign personality: %s is incomplete, ignored\n", name);
++			put_module(name);
++			continue;
++		}
++
++		// Personality modules stay loaded: teams may refer to them at any
++		// time.
++		sPersonalities[sPersonalityCount++] = module;
++		dprintf("foreign personality: loaded %s (%s)\n", name,
++			module->abi_name != NULL ? module->abi_name : "?");
++	}
++
++	close_module_list(cookie);
++}
++
++
++static void
++release_team_personality(Team* team, Thread* thread)
++{
++	foreign_personality_team_released(team);
++	if (thread != NULL)
++		atomic_and(&thread->flags, ~THREAD_FLAGS_FOREIGN_ABI);
++}
++
++
++status_t
++foreign_personality_exec(Team* team, Thread* thread, const char* path,
++	char* const* flatArgs, uint32 argCount, uint32 envCount, mode_t umask,
++	uint32 flags, const foreign_personality_module_info** _personality,
++	addr_t* _entry, addr_t* _stackPointer)
++{
++	const foreign_personality_module_info* personalities[kMaxPersonalities];
++	int32 count;
++	{
++		MutexLocker locker(sLock);
++		if (sLastScan < 0 || system_time() - sLastScan >= kRescanInterval)
++			scan_personality_modules_locked();
++
++		count = sPersonalityCount;
++		memcpy(personalities, sPersonalities, count * sizeof(personalities[0]));
++	}
++
++	if (count == 0) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++
++	// Read the start of the executable. Failures are left for the native
++	// path to report, which yields the same errors as before.
++	int fd = _kern_open(-1, path, O_RDONLY, 0);
++	if (fd < 0) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++	FileDescriptorCloser fdCloser(fd);
++
++	uint8 header[FOREIGN_PERSONALITY_HEADER_SIZE];
++	ssize_t headerSize = _kern_read(fd, 0, header, sizeof(header));
++	if (headerSize <= 0) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++
++	foreign_exec_args args = {};
++	args.team = team;
++	args.thread = thread;
++	args.path = path;
++	args.flat_args = flatArgs;
++	args.arg_count = argCount;
++	args.env_count = envCount;
++	args.umask = umask;
++	args.flags = flags;
++	args.fd = fd;
++	args.header = header;
++	args.header_size = headerSize;
++
++	const foreign_personality_module_info* personality = NULL;
++	for (int32 i = 0; i < count; i++) {
++		if (personalities[i]->probe(&args) == B_OK) {
++			personality = personalities[i];
++			break;
++		}
++	}
++
++	if (personality == NULL) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++
++	TRACE("%s claimed \"%s\"\n", personality->abi_name, path);
++
++	if (team->personality != personality)
++		release_team_personality(team, NULL);
++	team->personality = personality;
++	atomic_or(&thread->flags, THREAD_FLAGS_FOREIGN_ABI);
++
++	status_t status = personality->load(&args);
++	if (status != B_OK) {
++		dprintf("foreign personality: %s failed to load \"%s\": %s\n",
++			personality->abi_name, path, strerror(status));
++		// B_NOT_SUPPORTED would make the caller continue natively.
++		return status == B_NOT_SUPPORTED ? B_NOT_AN_EXECUTABLE : status;
++	}
++
++	*_personality = personality;
++	*_entry = args.entry;
++	*_stackPointer = args.stack_pointer;
++	return B_OK;
++}
++
++
++void
++foreign_personality_team_released(Team* team)
++{
++	const foreign_personality_module_info* personality = team->personality;
++	if (personality == NULL)
++		return;
++
++	if (personality->team_released != NULL)
++		personality->team_released(team);
++
++	team->personality = NULL;
++	team->personality_data = NULL;
++}
++
++
++void
++foreign_personality_syscall(struct iframe* frame)
++{
++	Thread* thread = thread_get_current_thread();
++	const foreign_personality_module_info* personality
++		= thread->team->personality;
++
++	if (personality == NULL) {
++		// Should not happen: the flag is only set while the team has a
++		// personality. Fail the call rather than the system.
++		dprintf("foreign_personality_syscall(): thread %" B_PRId32
++			" has no personality\n", thread->id);
++		frame->ax = (uint64)(int64)B_BAD_VALUE;
++		return;
++	}
++
++	personality->syscall(frame);
++}
+diff --git a/src/system/kernel/team.cpp b/src/system/kernel/team.cpp
+index 91206d6..78d8e30 100644
+--- a/src/system/kernel/team.cpp
++++ b/src/system/kernel/team.cpp
+@@ -58,6 +58,7 @@
+ #include <vfs.h>
+ #include <vm/vm.h>
+ #include <vm/VMAddressSpace.h>
++#include <foreign_personality.h>
+ #include <util/AutoLock.h>
+ #include <util/ThreadAutoLock.h>
+ 
+@@ -474,6 +475,9 @@ Team::Team(team_id id, bool kernel)
+ 
+ 	commpage_address = NULL;
+ 
++	personality = NULL;
++	personality_data = NULL;
++
+ 	clear_team_debug_info(&debug_info, true);
+ 
+ 	dead_threads_kernel_time = 0;
+@@ -515,6 +519,8 @@ Team::~Team()
+ 	// get rid of all associated data
+ 	PrepareForDeletion();
+ 
++	foreign_personality_team_released(this);
++
+ 	if (io_context != NULL)
+ 		vfs_put_io_context(io_context);
+ 	delete_owned_ports(this);
+@@ -1557,6 +1563,33 @@ team_create_thread_start_internal(void* args)
+ 	TRACE(("team_create_thread_start: entry thread %" B_PRId32 "\n",
+ 		thread->id));
+ 
++	// Give foreign ABI personalities (see foreign_personality.h) a chance to
++	// claim the executable. A personality that claims it loads the image and
++	// builds the initial stack itself; runtime_loader and the commpage are not
++	// used. For native executables this resets any personality the team had.
++	{
++		const foreign_personality_module_info* personality = NULL;
++		addr_t foreignEntry = 0;
++		addr_t foreignStackPointer = 0;
++		err = foreign_personality_exec(team, thread, teamArgs->path,
++			teamArgs->flat_args, teamArgs->arg_count, teamArgs->env_count,
++			teamArgs->umask, teamArgs->flags, &personality, &foreignEntry,
++			&foreignStackPointer);
++		if (err != B_NOT_SUPPORTED) {
++			free_team_arg(teamArgs);
++			if (err != B_OK)
++				return err;
++
++			team->Lock();
++			team->state = TEAM_STATE_NORMAL;
++			team->Unlock();
++
++			// returns only in case of error
++			return personality->enter_userspace(thread, foreignEntry,
++				foreignStackPointer);
++		}
++	}
++
+ 	// Main stack area layout is currently as follows (starting from 0):
+ 	//
+ 	// size								| usage
+diff --git a/src/system/kernel/thread.cpp b/src/system/kernel/thread.cpp
+index 9bc54cd..2887cb1 100644
+--- a/src/system/kernel/thread.cpp
++++ b/src/system/kernel/thread.cpp
+@@ -291,6 +291,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
+ 	user_stack_area(-1),
+ 	user_stack_base(0),
+ 	user_local_storage(0),
++	personality_data(NULL),
+ 	kernel_errno(0),
+ 	user_time(0),
+ 	kernel_time(0),

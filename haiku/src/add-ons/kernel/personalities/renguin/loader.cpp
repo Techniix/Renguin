@@ -351,6 +351,8 @@ renguin_load(foreign_exec_args* args)
 	data->entry = ehdr.e_entry;
 	data->phentsize = ehdr.e_phentsize;
 	data->phnum = ehdr.e_phnum;
+	data->brk_area = -1;
+	addr_t imageTop = 0;
 
 	bool haveInterp = false;
 	addr_t firstLoadVAddr = 0;
@@ -372,6 +374,9 @@ renguin_load(foreign_exec_args* args)
 					firstLoadVAddr = phdr->p_vaddr + bias;
 					haveFirstLoad = true;
 				}
+				addr_t segTop = phdr->p_vaddr + bias + phdr->p_memsz;
+				if (segTop > imageTop)
+					imageTop = segTop;
 				break;
 			}
 			case RENGUIN_PT_INTERP:
@@ -392,6 +397,10 @@ renguin_load(foreign_exec_args* args)
 	// at file offset e_phoff. Point AT_PHDR there.
 	data->executable_base = bias;
 	data->phdr = firstLoadVAddr + ehdr.e_phoff;
+
+	// The program break (heap) starts on the page after the last segment.
+	data->brk_start = ROUNDUP(imageTop, B_PAGE_SIZE);
+	data->brk_current = data->brk_start;
 
 	status = build_stack(thread, args, data, &args->stack_pointer);
 	if (status != B_OK) {

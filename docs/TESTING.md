@@ -92,6 +92,7 @@ unimplemented call, a single `unimplemented Linux syscall N (name)` line.
 | `enosys` | unknown syscall | exits 38 (`ENOSYS`) |
 | `xmm` | vector registers survive a syscall | exits 0 |
 | `args` | argv/envp/auxv stack layout | exits 0, echoes args |
+| `mem` | `mmap`/`munmap`/`brk`/`uname` (Stage 4) | prints `ok`, exits 0 |
 
 The `xmm` test is the important early regression check: it fails if the kernel
 clears the vector registers on the Linux syscall return path (see the research

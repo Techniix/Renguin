@@ -10,5 +10,8 @@ if $(TARGET_ARCH) = x86_64 {
 		loader.cpp
 		errno.cpp
 		syscall.cpp
+		mem.cpp
+		file.cpp
+		misc.cpp
 	;
 }

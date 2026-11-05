@@ -96,8 +96,10 @@ struct renguin_team {
 	addr_t	phdr;				// address of the executable's program headers
 	uint16	phentsize;
 	uint16	phnum;
-	addr_t	brk_start;			// reserved for a later brk() implementation
-	addr_t	brk_current;
+	addr_t	brk_start;			// base of the program break (heap)
+	addr_t	brk_current;		// current program break
+	area_id	brk_area;			// anonymous area backing the heap, or -1
+	addr_t	clear_child_tid;	// set_tid_address(): zero + futex on exit
 };
 
 
@@ -108,6 +110,16 @@ extern "C" {
 // errno.cpp
 int		renguin_errno_from_haiku(status_t status);
 
+// Encode a Haiku result for return in rax: a byte count or value stays,
+// a negative Haiku status_t becomes a negative Linux errno.
+static inline int64
+renguin_encode(ssize_t result)
+{
+	if (result < 0)
+		return -(int64)renguin_errno_from_haiku((status_t)result);
+	return result;
+}
+
 // loader.cpp
 status_t	renguin_probe(const struct foreign_exec_args* args);
 status_t	renguin_load(struct foreign_exec_args* args);
@@ -117,6 +129,36 @@ void		renguin_team_released(Team* team);
 
 // syscall.cpp
 void		renguin_syscall(struct iframe* frame);
+struct renguin_team* renguin_current_team();
+
+// mem.cpp
+int64		renguin_sys_brk(uint64 addr);
+int64		renguin_sys_mmap(uint64 addr, uint64 length, uint64 prot,
+				uint64 flags, int64 fd, int64 offset);
+int64		renguin_sys_munmap(uint64 addr, uint64 length);
+int64		renguin_sys_mprotect(uint64 addr, uint64 length, uint64 prot);
+
+// file.cpp
+int64		renguin_sys_read(int fd, uint64 buffer, uint64 count);
+int64		renguin_sys_write(int fd, uint64 buffer, uint64 count);
+int64		renguin_sys_writev(int fd, uint64 iov, uint64 count);
+int64		renguin_sys_readv(int fd, uint64 iov, uint64 count);
+int64		renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode);
+int64		renguin_sys_close(int fd);
+int64		renguin_sys_lseek(int fd, int64 offset, int whence);
+int64		renguin_sys_fstat(int fd, uint64 statbuf);
+int64		renguin_sys_newfstatat(int dirfd, uint64 path, uint64 statbuf,
+				uint64 flags);
+int64		renguin_sys_readlinkat(int dirfd, uint64 path, uint64 buffer,
+				uint64 size);
+
+// misc.cpp
+int64		renguin_sys_uname(uint64 buffer);
+int64		renguin_sys_getrandom(uint64 buffer, uint64 length, uint64 flags);
+int64		renguin_sys_set_tid_address(uint64 tidptr);
+int64		renguin_sys_clock_gettime(uint64 clockId, uint64 timespec);
+int64		renguin_sys_nanosleep(uint64 request, uint64 remain);
+int64		renguin_sys_arch_prctl(uint64 code, uint64 addr);
 
 #ifdef __cplusplus
 }

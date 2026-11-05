@@ -5,3 +5,4 @@ enosys||38|
 exit||7|
 xmm||0|x
 args|a b|0|a\nb
+mem||0|ok

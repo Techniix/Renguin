@@ -8,3 +8,4 @@ tests/linux/poc/args
 # Built tools
 tools/renguin-brand/renguin-brand
 *.o
+tests/linux/poc/mem

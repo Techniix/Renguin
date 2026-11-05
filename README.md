@@ -27,14 +27,16 @@ facilities. Native Haiku programs never touch any of this.
 
 ## Project status
 
-**Stage 3 — a minimal Linux executable runs.** This is early, pre-boot work.
+**Stage 4 in progress — the core syscalls a static program needs are landing.**
+This is early, pre-boot work.
 
 | Done | In progress | Next |
 | --- | --- | --- |
-| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting & running on real Haiku | Core file/process/memory syscalls |
-| Kernel ABI-personality hooks (patch) | | `arch_prctl`, `brk`, `mmap` for musl startup |
-| Linux ELF loader + syscall dispatch (module) | | Dynamic linking (`ld-linux`, glibc/musl) |
-| `write`, `exit`, `exit_group` | | Threads, futexes, signals |
+| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting & running on real Haiku | Process: `clone`/`fork`/`wait4` |
+| Kernel ABI-personality hooks (patch) | Dynamic linking (`ld-linux`, glibc/musl) | Threads, futexes, signals |
+| Linux ELF loader + syscall dispatch (module) | | `/compat/linux` path overlay |
+| `write`, `exit`, `exit_group` (Stage 3) | | |
+| Memory (`brk`, `mmap`, `munmap`, `mprotect`), TLS (`arch_prctl`), core file I/O (`openat`, `read`, `writev`, `fstat`…), `uname`, `getrandom`, `clock_gettime` | | |
 
 **Honesty about verification:** every source file here is **type-checked and
 assembled against the Haiku `master` headers** with a host compiler, and the
@@ -127,7 +129,7 @@ section 13):
 1. ✅ Research and FreeBSD↔Haiku mapping
 2. ✅ Linux ELF recognition and ABI selection
 3. ✅ Minimal executable: `write` + `exit`
-4. ⬜ Core syscalls: files, process, memory, basic signals
+4. 🟨 Core syscalls: memory, TLS, and file I/O done; process and signals next
 5. ⬜ Dynamic linking: `ld-linux`, glibc, musl
 6. ⬜ Threads, futexes, epoll, `/proc`
 7. ⬜ Shells and command-line applications

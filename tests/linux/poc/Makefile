@@ -2,7 +2,7 @@
 # x86-64 executables. Run this on Linux (or with a Linux cross toolchain).
 CC ?= gcc
 CFLAGS = -O2 -ffreestanding -fno-stack-protector -fno-pie -nostdlib -static -no-pie -Wl,--build-id=none
-PROGRAMS = hello ebadf enosys exit xmm args
+PROGRAMS = hello ebadf enosys exit xmm args mem
 
 all: $(PROGRAMS)
 
@@ -10,6 +10,9 @@ all: $(PROGRAMS)
 	$(CC) $(CFLAGS) -o $@ $<
 
 args: args.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+mem: mem.c
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:

@@ -27,26 +27,28 @@ facilities. Native Haiku programs never touch any of this.
 
 ## Project status
 
-**Stage 4 in progress — the core syscalls a static program needs are landing.**
-This is early, pre-boot work.
+**Stage 4 code-complete for single-threaded programs; Stage 5 (dynamic
+linking) loader in place. Waiting on the first boot on Haiku.**
 
-| Done | In progress | Next |
+| Done | Waiting for first boot | Next |
 | --- | --- | --- |
-| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting & running on real Haiku | Process: `clone`/`fork`/`wait4` |
-| Kernel ABI-personality hooks (patch) | Dynamic linking (`ld-linux`, glibc/musl) | Threads, futexes, signals |
-| Linux ELF loader + syscall dispatch (module) | | `/compat/linux` path overlay |
-| `write`, `exit`, `exit_group` (Stage 3) | | |
-| Memory (`brk`, `mmap`, `munmap`, `mprotect`), TLS (`arch_prctl`), core file I/O (`openat`, `read`, `writev`, `fstat`…), `uname`, `getrandom`, `clock_gettime` | | |
+| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting a patched Haiku and running the 11 tests ([guide](docs/TESTING.md)) | Process: `clone`/`fork`/`execve`/`wait4` |
+| Kernel ABI-personality hooks (patch, applies to current `master`) | Real static glibc programs (`printf`, `malloc`, stdio) | Threads, futexes, Linux signal frames |
+| Linux ELF loader: static, static-PIE and dynamic (`ld-linux`/`ld-musl`), automatic Linux detection | Alpine's dynamically linked busybox from a Linux root | `poll`/`epoll`, sockets, `/proc` |
+| ~90 syscalls: memory, TLS, files and directories, descriptors, pipes, terminal `ioctl`s, ids, clocks, limits, `kill`/`tgkill` | | |
+| `/compat/linux`-style Linux root with FreeBSD-style path lookup | | |
+| Checked user-memory access; `load_image()` integration; `umask` | | |
 
-**Honesty about verification:** every source file here is **type-checked and
-assembled against the Haiku `master` headers** with a host compiler, and the
-Linux test programs are **built and verified on real Linux** to pin down the
-expected behavior. Renguin has **not yet been built with the full Haiku
-cross-toolchain or booted**, because that toolchain and Haiku's package servers
-aren't reachable from the environment this was developed in. The first thing a
-Haiku developer should do is the full build in [docs/TESTING.md](docs/TESTING.md)
-and tell us what breaks. Claims are marked **[V]** verified / **[H]** hypothesis
-throughout the research report.
+**Honesty about verification:** every module source, the kernel files the
+patch changes, and the patched syscall-entry assembly are **compiled against
+current Haiku `master` headers in kernel mode** (`tools/check-module.sh`), and
+every syscall number is checked against FreeBSD's table. The Linux test
+programs are **built and verified on real Linux** to pin down the expected
+behavior. Renguin has **not yet been linked with Haiku's cross-toolchain or
+booted**; the environment it is developed in cannot reach Haiku's package
+servers. [docs/TESTING.md](docs/TESTING.md) is the step-by-step guide for that
+first boot. Claims are marked **[V]** verified / **[H]** hypothesis throughout
+the research report.
 
 ## How it works
 
@@ -63,7 +65,7 @@ throughout the research report.
                      (one extra branch)                _user_* / vm / vfs
 ```
 
-Four small, ABI-neutral changes to Haiku's own kernel make this possible; the
+Three small, ABI-neutral changes to Haiku's own kernel make this possible; the
 rest lives in the module:
 
 1. An **exec-time probe hook** so the kernel asks personalities before loading
@@ -72,7 +74,12 @@ rest lives in the module:
    vector registers Linux expects (`interrupts.S`).
 3. A **Linux TLS path** so the kernel doesn't overwrite glibc's thread block
    (`thread.cpp`, `arch_thread.cpp`).
-4. Later stages add a wider signal range and a `/compat/linux` path overlay.
+A fourth will be needed later: a wider signal range for glibc's internal
+signals.
+
+The `/compat/linux`-style Linux root is handled inside the module, the way
+older FreeBSD releases did it per system call (`linux_emul_convpath()`), so it
+needs no change to Haiku's VFS.
 
 The full rationale, with exact FreeBSD and Haiku source references, is in the
 **[research report](docs/research-report.md)** — the heart of this repository.
@@ -93,33 +100,45 @@ docs/
   TESTING.md                 How to build the patched kernel, module, and tests
 patches/haiku/               Patch adding the ABI-personality hooks to Haiku
 haiku/src/add-ons/kernel/personalities/renguin/
-                             The Renguin kernel module (loader, dispatch, syscalls)
+                             The Renguin kernel module:
+  loader.cpp                   ELF detection and loading, Linux stack, entry
+  syscall.cpp                  Linux syscall dispatch
+  file.cpp tty.cpp             files, directories, descriptors, terminal ioctls
+  mem.cpp                      brk, mmap and friends
+  misc.cpp process.cpp         time, TLS, ids, signals, limits
+  path.cpp                     the Linux root ("/compat/linux") lookup
+  usermem.cpp                  checked user-memory access, scratch space
   abi/                       Linux constants/tables generated from FreeBSD (BSD-2)
 tools/
+  check-module.sh            Compiles everything against a Haiku checkout
+  check-syscall-numbers.py   Checks syscall numbers against FreeBSD's table
   renguin-brand/             Marks a static ELF as Linux (EI_OSABI = 3)
   gen-abi.py                 Regenerates the ABI headers from a FreeBSD checkout
-tests/linux/poc/             Tiny libc-free Linux test programs + expected results
+tests/linux/poc/             Linux test programs (raw-syscall and glibc) +
+                             expected results
 ```
 
 ## Quick start
 
-See **[docs/TESTING.md](docs/TESTING.md)** for the full build. In short, on a
-Haiku x86-64 build host:
+See **[docs/TESTING.md](docs/TESTING.md)** for the full build and test guide.
+In short:
 
 ```sh
-# 1. Apply the kernel hooks and build Haiku with the Renguin module.
+# 1. Check the module against your Haiku checkout (seconds, on Linux).
+tools/check-module.sh /path/to/haiku
+
+# 2. Patch Haiku, add the module, and include it in the image.
 cd /path/to/haiku
 git apply /path/to/renguin/patches/haiku/0001-kernel-foreign-ABI-personality-hooks.patch
 cp -r /path/to/renguin/haiku/src/add-ons/kernel/personalities src/add-ons/kernel/
-jam -q haiku.hpkg        # or a full image
+echo 'AddFilesToHaikuImage system non-packaged add-ons kernel personalities : renguin ;' \
+    >> build/jam/UserBuildConfig
+jam -q @nightly-vmware      # from a configured generated.x86_64 directory
 
-# 2. On the booted Haiku system, brand and run a static Linux binary.
-renguin-brand ./hello        # set EI_OSABI = ELFOSABI_LINUX
-./hello                      # runs through Renguin
+# 3. In the booted image: unmodified Linux programs just run.
+./libc hello                 # a static glibc program
+./run-tests.sh .             # the whole suite
 ```
-
-The proof-of-concept target is a statically linked, libc-free Linux program
-that prints `hello` and exits with status 42 — see `tests/linux/poc/`.
 
 ## Roadmap
 
@@ -129,8 +148,10 @@ section 13):
 1. ✅ Research and FreeBSD↔Haiku mapping
 2. ✅ Linux ELF recognition and ABI selection
 3. ✅ Minimal executable: `write` + `exit`
-4. 🟨 Core syscalls: memory, TLS, and file I/O done; process and signals next
-5. ⬜ Dynamic linking: `ld-linux`, glibc, musl
+4. 🟨 Core syscalls: memory, TLS, files, descriptors, tty, ids, time done;
+   process creation and signal delivery next
+5. 🟨 Dynamic linking: interpreter loading and the Linux root done; needs
+   testing with Alpine (musl) and Debian (glibc) userlands
 6. ⬜ Threads, futexes, epoll, `/proc`
 7. ⬜ Shells and command-line applications
 8. ⬜ GUI: GTK, Qt, SDL, D-Bus

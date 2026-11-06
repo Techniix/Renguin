@@ -9,3 +9,9 @@ tests/linux/poc/args
 tools/renguin-brand/renguin-brand
 *.o
 tests/linux/poc/mem
+tests/linux/poc/fileio
+tests/linux/poc/ids
+tests/linux/poc/libc
+tests/linux/poc/libc-pie
+tests/linux/poc/renguin-brand
+tests/linux/poc/branded

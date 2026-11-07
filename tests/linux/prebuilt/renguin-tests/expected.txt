@@ -10,3 +10,4 @@ fileio||0|ok
 ids||0|ok
 libc|x|3|hello from libc, argc=2 x
 libc-pie|x|3|hello from libc, argc=2 x
+proc||0|exec-ok\nok

@@ -552,6 +552,38 @@ from source.
    requirement; Renguin uses `user_timer_get_clock()` (`UserTimer.cpp`), which
    takes the lock.
 
+10. **Exec paths arrive unresolved.** libroot passes the program path to
+    `_kern_exec()`/`_kern_load_image()` as the program gave it (`./hello`
+    stays relative). runtime_loader resolves it in userland. A kernel hook
+    must resolve it in the team's I/O context (`vfs_normalize_path(...,
+    kernel = false)`); `_kern_open()` would resolve it against the kernel's
+    root.
+11. **libroot's exec checks before the kernel.** `__test_executable()` asks
+    runtime_loader's `test_executable()` (`runtime_loader.cpp`), which
+    accepts any ELF64 file with a nonzero entry point (no OS/ABI check). So
+    Linux programs reach the kernel from Haiku shells, and `#!` scripts are a
+    libroot feature that Renguin has to provide for Linux programs.
+12. **Directories opened with `open()` can't be listed.** A Haiku FD from
+    `open()` on a directory uses `sFileOps`, whose `read_dir` is NULL
+    (`fs/vfs.cpp`). Haiku's own `fdopendir()` re-opens it with
+    `_kern_open_dir(fd, NULL)` and `dup2()`s it back; Renguin's `openat()`
+    does the same, so `opendir()` plus `getdents64` works.
+13. **What `fork()` needs from the kernel.** `fork_team()` copies the FS
+    base, the signal mask and the images, but not the personality. The
+    child's `enter_userspace()` would also reset the FS base
+    (`arch_thread_init_tls()`), write Haiku TLS slots 1 and 2 (glibc's `dtv`
+    and `self`), and leave signals deferred until libroot undefers them. The
+    patch's fork hook and the foreign-ABI case in `enter_userspace()` cover
+    all of this.
+14. **Haiku programs have no `PT_INTERP`.** Haiku links executables with
+    `-shared` (buildtools `gcc/config/i386/haiku64.h`, `LINK_SPEC`); the
+    kernel loads runtime_loader itself. All of them have `PT_DYNAMIC`
+    (libroot.so), which is what the scoped fallback brand relies on.
+15. **Restarted syscalls.** The native entry clears
+    `THREAD_FLAGS_SYSCALL_RESTARTED` after every call (`interrupts.S`);
+    restartable calls such as `_user_wait_for_child()` read it. The foreign
+    path now clears it too.
+
 ## Sources
 
 - FreeBSD source, commit `c502df9eb193`: [github.com/freebsd/freebsd-src](https://github.com/freebsd/freebsd-src/tree/main/sys/compat/linux)

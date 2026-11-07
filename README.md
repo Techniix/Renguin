@@ -32,8 +32,9 @@ linking) loader in place. Waiting on the first boot on Haiku.**
 
 | Done | Waiting for first boot | Next |
 | --- | --- | --- |
-| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting a patched Haiku and running the 11 tests ([guide](docs/TESTING.md)) | Process: `clone`/`fork`/`execve`/`wait4` |
-| Kernel ABI-personality hooks (patch, applies to current `master`) | Real static glibc programs (`printf`, `malloc`, stdio) | Threads, futexes, Linux signal frames |
+| Process creation: `fork`/`vfork`/process-style `clone`, `execve` (with `#!` scripts), `wait4` | Alpine's busybox shell running commands | |
+| Source-level research vs. FreeBSD + Haiku ([report](docs/research-report.md)) | Booting a patched Haiku and running the 12 tests ([guide](docs/TESTING.md)) | Threads (`CLONE_THREAD`), futexes |
+| Kernel ABI-personality hooks (patch, applies to current `master`) | Real static glibc programs (`printf`, `malloc`, stdio) | Linux signal frames |
 | Linux ELF loader: static, static-PIE and dynamic (`ld-linux`/`ld-musl`), automatic Linux detection | Alpine's dynamically linked busybox from a Linux root | `poll`/`epoll`, sockets, `/proc` |
 | ~90 syscalls: memory, TLS, files and directories, descriptors, pipes, terminal `ioctl`s, ids, clocks, limits, `kill`/`tgkill` | | |
 | `/compat/linux`-style Linux root with FreeBSD-style path lookup | | |
@@ -65,7 +66,7 @@ the research report.
                      (one extra branch)                _user_* / vm / vfs
 ```
 
-Three small, ABI-neutral changes to Haiku's own kernel make this possible; the
+A few small, ABI-neutral changes to Haiku's own kernel make this possible; the
 rest lives in the module:
 
 1. An **exec-time probe hook** so the kernel asks personalities before loading
@@ -74,7 +75,9 @@ rest lives in the module:
    vector registers Linux expects (`interrupts.S`).
 3. A **Linux TLS path** so the kernel doesn't overwrite glibc's thread block
    (`thread.cpp`, `arch_thread.cpp`).
-A fourth will be needed later: a wider signal range for glibc's internal
+4. A **fork hook** so a forked Linux child keeps the Linux personality, its
+   thread pointer, and undeferred signals (`team.cpp`, `thread.cpp`).
+Another will be needed later: a wider signal range for glibc's internal
 signals.
 
 The `/compat/linux`-style Linux root is handled inside the module, the way
@@ -148,8 +151,8 @@ section 13):
 1. ✅ Research and FreeBSD↔Haiku mapping
 2. ✅ Linux ELF recognition and ABI selection
 3. ✅ Minimal executable: `write` + `exit`
-4. 🟨 Core syscalls: memory, TLS, files, descriptors, tty, ids, time done;
-   process creation and signal delivery next
+4. 🟨 Core syscalls: memory, TLS, files, descriptors, tty, ids, time and
+   process creation done; signal delivery next
 5. 🟨 Dynamic linking: interpreter loading and the Linux root done; needs
    testing with Alpine (musl) and Debian (glibc) userlands
 6. ⬜ Threads, futexes, epoll, `/proc`

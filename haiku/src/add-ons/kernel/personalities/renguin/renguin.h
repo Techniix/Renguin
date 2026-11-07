@@ -103,6 +103,10 @@ typedef struct {
 } renguin_phdr;
 
 
+#define RENGUIN_BRK_AREA_LOOKUP	(-2)
+	// the heap area exists but its ID is not known yet (fork()ed child)
+
+
 // Per-team data owned by the personality, hung off Team::personality_data.
 struct renguin_team {
 	addr_t	executable_base;	// load bias of the main executable
@@ -115,8 +119,13 @@ struct renguin_team {
 	addr_t	brk_start;			// base of the program break (heap)
 	addr_t	brk_current;		// current program break (exact, unaligned)
 	addr_t	brk_mapped_end;		// end of the pages backing the break
-	area_id	brk_area;			// anonymous area backing the heap, or -1
+	area_id	brk_area;			// anonymous area backing the heap, or -1;
+								// RENGUIN_BRK_AREA_LOOKUP after fork()
 	addr_t	clear_child_tid;	// set_tid_address(): zero + futex on exit
+	addr_t	set_child_tid;		// clone(CLONE_CHILD_SETTID) in a fork()ed
+								// child: written when it first runs
+	uint64	fork_gs_base;		// parent's GS base, for a fork()ed child
+								// (Haiku's fork copies only the FS base)
 	image_id app_image;			// registered B_APP_IMAGE, or -1
 	bool	have_linux_root;	// RENGUIN_LINUX_ROOT existed at exec time
 	uint32	umask;				// file creation mask. Haiku's kernel does not
@@ -150,6 +159,18 @@ status_t	renguin_load(struct foreign_exec_args* args);
 status_t	renguin_enter_userspace(Thread* thread, addr_t entry,
 				addr_t stackPointer);
 void		renguin_team_released(Team* team);
+bool		renguin_is_linux_team(Team* team);
+
+// exec.cpp
+status_t	renguin_team_forked(Team* parent, Team* child);
+void		renguin_thread_entering_userspace(Thread* thread, bool forked);
+int64		renguin_sys_clone(uint64 flags, uint64 newStack, uint64 parentTid,
+				uint64 childTid, uint64 tls);
+int64		renguin_sys_fork();
+int64		renguin_sys_vfork();
+int64		renguin_sys_wait4(int64 pid, uint64 status, uint64 options,
+				uint64 rusage);
+int64		renguin_sys_execve(uint64 path, uint64 argv, uint64 envp);
 
 // syscall.cpp
 void		renguin_syscall(struct iframe* frame);

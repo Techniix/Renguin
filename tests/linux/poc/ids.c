@@ -4,8 +4,9 @@
 
 struct ts { i64 sec, nsec; };
 
-int check_main(void)
+int check_main(int argc, char** argv)
 {
+	(void)argc; (void)argv;
 	i64 pid = sys0(SYS_getpid);
 	if (pid <= 0) return 2;
 	if (sys0(SYS_gettid) != pid) return 3;	/* main thread id == pid */

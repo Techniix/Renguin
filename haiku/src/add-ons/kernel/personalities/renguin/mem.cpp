@@ -84,6 +84,16 @@ renguin_sys_brk(uint64 addr)
 
 	team_id team = thread_get_current_thread()->team->id;
 
+	// After fork() the child's heap area has a new ID; find it by address.
+	if (data->brk_area == RENGUIN_BRK_AREA_LOOKUP) {
+		data->brk_area = _user_area_for((void*)data->brk_start);
+		if (data->brk_area < 0) {
+			data->brk_area = -1;
+			data->brk_mapped_end = data->brk_start;
+			data->brk_current = data->brk_start;
+		}
+	}
+
 	if (newMappedEnd == data->brk_mapped_end) {
 		// Nothing to map or unmap.
 	} else if (newMappedEnd == data->brk_start) {

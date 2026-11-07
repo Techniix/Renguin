@@ -17,5 +17,6 @@ if $(TARGET_ARCH) = x86_64 {
 		tty.cpp
 		misc.cpp
 		process.cpp
+		exec.cpp
 	;
 }

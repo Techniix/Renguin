@@ -74,7 +74,12 @@ enum {
 	LINUX_dup2				= 33,
 	LINUX_nanosleep			= 35,
 	LINUX_getpid			= 39,
+	LINUX_clone				= 56,
+	LINUX_fork				= 57,
+	LINUX_vfork				= 58,
+	LINUX_execve			= 59,
 	LINUX_exit				= 60,
+	LINUX_wait4				= 61,
 	LINUX_kill				= 62,
 	LINUX_uname				= 63,
 	LINUX_fcntl				= 72,
@@ -451,6 +456,24 @@ renguin_syscall(struct iframe* frame)
 			break;
 		case LINUX_sigaltstack:
 			result = renguin_sys_sigaltstack(a1, a2);
+			break;
+
+		// --- Process creation (exec.cpp) ---
+		case LINUX_clone:
+			// x86-64 argument order: flags, newsp, parent_tid, child_tid, tls
+			result = renguin_sys_clone(a1, a2, a3, a4, a5);
+			break;
+		case LINUX_fork:
+			result = renguin_sys_fork();
+			break;
+		case LINUX_vfork:
+			result = renguin_sys_vfork();
+			break;
+		case LINUX_execve:
+			result = renguin_sys_execve(a1, a2, a3);
+			break;
+		case LINUX_wait4:
+			result = renguin_sys_wait4((int64)a1, a2, a3, a4);
 			break;
 
 		// --- Process exit (handled inline) ---

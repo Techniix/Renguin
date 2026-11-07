@@ -6,7 +6,7 @@
 CC ?= gcc
 RAWFLAGS = -O2 -ffreestanding -fno-stack-protector -fno-pie -nostdlib \
 	-static -no-pie -Wl,--build-id=none
-RAW = hello ebadf enosys exit xmm args mem fileio ids
+RAW = hello ebadf enosys exit xmm args mem fileio ids proc
 LIBC = libc libc-pie
 PROGRAMS = $(RAW) $(LIBC)
 
@@ -30,7 +30,7 @@ branded: $(RAW) renguin-brand
 args mem: %: %.c
 	$(CC) $(RAWFLAGS) -o $@ $<
 
-fileio ids: %: %.c sys.h
+fileio ids proc: %: %.c sys.h
 	$(CC) $(RAWFLAGS) -o $@ $<
 
 libc: libc.c

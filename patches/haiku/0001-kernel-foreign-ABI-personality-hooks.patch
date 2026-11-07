@@ -1,9 +1,9 @@
 diff --git a/headers/private/kernel/foreign_personality.h b/headers/private/kernel/foreign_personality.h
 new file mode 100644
-index 0000000..832752d
+index 0000000..24528db
 --- /dev/null
 +++ b/headers/private/kernel/foreign_personality.h
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,136 @@
 +/*
 + * Copyright 2026, Renguin contributors.
 + * Distributed under the terms of the MIT License.
@@ -93,6 +93,18 @@ index 0000000..832752d
 +	void			(*team_released)(Team* team);
 +		// The team stops using this personality: it executes a native
 +		// program, or it is being deleted. May be NULL.
++
++	status_t		(*team_forked)(Team* parent, Team* child);
++		// Called in the parent during fork(), after the child's address
++		// space has been copied and before its thread runs. Sets up
++		// child->personality_data. May be NULL: the child then starts
++		// without personality data.
++
++	void			(*thread_entering_userspace)(Thread* thread, bool forked);
++		// Called in a new thread of a team using this personality (for
++		// example a fork()ed child's main thread) right before it enters
++		// userland for the first time. Haiku's own TLS setup is skipped for
++		// such threads. May be NULL.
 +} foreign_personality_module_info;
 +
 +
@@ -110,6 +122,14 @@ index 0000000..832752d
 +	// Other errors: a personality claimed it but loading failed.
 +
 +void		foreign_personality_team_released(Team* team);
++
++status_t	foreign_personality_fork(Team* parent, Team* child,
++				Thread* childThread);
++	// fork(): gives the child the parent's personality, if any
++
++void		foreign_personality_thread_entering_userspace(Thread* thread,
++				bool forked);
++	// called from enter_userspace() for threads with THREAD_FLAGS_FOREIGN_ABI
 +
 +void		foreign_personality_syscall(struct iframe* frame);
 +	// called from the architecture's system call entry
@@ -278,10 +298,10 @@ index ba531e0..f605769 100644
  	X86PagingStructures* activePagingStructures
 diff --git a/src/system/kernel/foreign_personality.cpp b/src/system/kernel/foreign_personality.cpp
 new file mode 100644
-index 0000000..cb04c66
+index 0000000..e7fc561
 --- /dev/null
 +++ b/src/system/kernel/foreign_personality.cpp
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,282 @@
 +/*
 + * Copyright 2026, Renguin contributors.
 + * Distributed under the terms of the MIT License.
@@ -505,6 +525,41 @@ index 0000000..cb04c66
 +}
 +
 +
++status_t
++foreign_personality_fork(Team* parent, Team* child, Thread* childThread)
++{
++	const foreign_personality_module_info* personality = parent->personality;
++	if (personality == NULL)
++		return B_OK;
++
++	child->personality = personality;
++	child->personality_data = NULL;
++	if (personality->team_forked != NULL) {
++		status_t status = personality->team_forked(parent, child);
++		if (status != B_OK) {
++			child->personality = NULL;
++			child->personality_data = NULL;
++			return status;
++		}
++	}
++
++	// The child's thread has not run yet; it enters userland through
++	// enter_userspace(), which checks this flag.
++	atomic_or(&childThread->flags, THREAD_FLAGS_FOREIGN_ABI);
++	return B_OK;
++}
++
++
++void
++foreign_personality_thread_entering_userspace(Thread* thread, bool forked)
++{
++	const foreign_personality_module_info* personality
++		= thread->team->personality;
++	if (personality != NULL && personality->thread_entering_userspace != NULL)
++		personality->thread_entering_userspace(thread, forked);
++}
++
++
 +void
 +foreign_personality_syscall(struct iframe* frame)
 +{
@@ -530,7 +585,7 @@ index 0000000..cb04c66
 +		atomic_and(&thread->flags, ~THREAD_FLAGS_SYSCALL_RESTARTED);
 +}
 diff --git a/src/system/kernel/team.cpp b/src/system/kernel/team.cpp
-index 91206d6..78d8e30 100644
+index 91206d6..36402c0 100644
 --- a/src/system/kernel/team.cpp
 +++ b/src/system/kernel/team.cpp
 @@ -58,6 +58,7 @@
@@ -594,11 +649,32 @@ index 91206d6..78d8e30 100644
  	// Main stack area layout is currently as follows (starting from 0):
  	//
  	// size								| usage
+@@ -2239,6 +2272,12 @@ fork_team(void)
+ 	if (copy_images(parentTeam->id, team) != B_OK)
+ 		goto err5;
+ 
++	// Inherit a foreign ABI personality (see foreign_personality.h). On
++	// failure the team deletion releases whatever the personality set up.
++	status = foreign_personality_fork(parentTeam, team, thread);
++	if (status != B_OK)
++		goto err5;
++
+ 	// insert the team into its parent and the teams hash
+ 	parentTeam->LockTeamAndProcessGroup();
+ 	team->Lock();
 diff --git a/src/system/kernel/thread.cpp b/src/system/kernel/thread.cpp
-index 9bc54cd..2887cb1 100644
+index 9bc54cd..d4fbc97 100644
 --- a/src/system/kernel/thread.cpp
 +++ b/src/system/kernel/thread.cpp
-@@ -291,6 +291,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
+@@ -34,6 +34,7 @@
+ #include <cpu.h>
+ #include <elf.h>
+ #include <interrupts.h>
++#include <foreign_personality.h>
+ #include <kimage.h>
+ #include <kscheduler.h>
+ #include <ksignal.h>
+@@ -291,6 +292,7 @@ Thread::Thread(const char* name, thread_id threadID, struct cpu_ent* cpu)
  	user_stack_area(-1),
  	user_stack_base(0),
  	user_local_storage(0),
@@ -606,3 +682,67 @@ index 9bc54cd..2887cb1 100644
  	kernel_errno(0),
  	user_time(0),
  	kernel_time(0),
+@@ -738,7 +740,13 @@ remove_thread_from_team(Team *team, Thread *thread)
+ static status_t
+ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
+ {
+-	status_t error = arch_thread_init_tls(thread);
++	// Threads of foreign ABI teams (see foreign_personality.h) manage their
++	// thread pointer themselves: a fork()ed child keeps its parent's, and
++	// Haiku's TLS slots must not be written into the foreign ABI's thread
++	// block.
++	const bool foreignABI = (thread->flags & THREAD_FLAGS_FOREIGN_ABI) != 0;
++
++	status_t error = foreignABI ? B_OK : arch_thread_init_tls(thread);
+ 	if (error != B_OK) {
+ 		dprintf("Failed to init TLS for new userland thread \"%s\" (%" B_PRId32
+ 			")\n", thread->name, thread->id);
+@@ -754,8 +762,11 @@ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
+ 	userThread->pthread = args->pthread;
+ 	userThread->flags = 0;
+ 	userThread->wait_status = B_OK;
++	// Native code undefers signals itself (libroot does after fork()); foreign
++	// ABI code never will.
+ 	userThread->defer_signals
+-		= (args->flags & THREAD_CREATION_FLAG_DEFER_SIGNALS) != 0 ? 1 : 0;
++		= !foreignABI && (args->flags & THREAD_CREATION_FLAG_DEFER_SIGNALS) != 0
++			? 1 : 0;
+ 	userThread->pending_signals = 0;
+ 	arch_cpu_disable_user_access();
+ 
+@@ -766,19 +777,28 @@ enter_userspace(Thread* thread, UserThreadEntryArguments* args)
+ 	tls[TLS_THREAD_ID_SLOT] = thread->id;
+ 	tls[TLS_USER_THREAD_SLOT] = (addr_t)thread->user_thread;
+ 
++	if (foreignABI) {
++		foreign_personality_thread_entering_userspace(thread,
++			args->forkArgs != NULL);
++	}
++
+ 	if (args->forkArgs == NULL) {
+-		if (user_memcpy((void*)thread->user_local_storage, tls, sizeof(tls)) != B_OK)
++		if (!foreignABI && user_memcpy((void*)thread->user_local_storage, tls,
++				sizeof(tls)) != B_OK) {
+ 			return B_BAD_ADDRESS;
++		}
+ 	} else {
+ 		// This is a fork()ed thread.
+ 
+ 		// Update select TLS values, do not clear the whole array.
+-		arch_cpu_enable_user_access();
+-		addr_t* userTls = (addr_t*)thread->user_local_storage;
+-		ASSERT(userTls[TLS_BASE_ADDRESS_SLOT] == thread->user_local_storage);
+-		userTls[TLS_THREAD_ID_SLOT] = tls[TLS_THREAD_ID_SLOT];
+-		userTls[TLS_USER_THREAD_SLOT] = tls[TLS_USER_THREAD_SLOT];
+-		arch_cpu_disable_user_access();
++		if (!foreignABI) {
++			arch_cpu_enable_user_access();
++			addr_t* userTls = (addr_t*)thread->user_local_storage;
++			ASSERT(userTls[TLS_BASE_ADDRESS_SLOT] == thread->user_local_storage);
++			userTls[TLS_THREAD_ID_SLOT] = tls[TLS_THREAD_ID_SLOT];
++			userTls[TLS_USER_THREAD_SLOT] = tls[TLS_USER_THREAD_SLOT];
++			arch_cpu_disable_user_access();
++		}
+ 
+ 		// Copy the fork args onto the stack and free them.
+ 		arch_fork_arg archArgs = *args->forkArgs;

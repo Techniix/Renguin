@@ -246,10 +246,29 @@ renguin_probe(const foreign_exec_args* args)
 		return B_OK;
 
 	// 3. A GNU ABI note saying Linux.
+	bool isDynamic = false;
 	for (int i = 0; i < ehdr->e_phnum; i++) {
 		const renguin_phdr* phdr = program_header(phdrs, ehdr, i);
 		if (phdr->p_type == RENGUIN_PT_NOTE && has_linux_abi_note(args->fd, phdr))
 			return B_OK;
+		if (phdr->p_type == RENGUIN_PT_INTERP
+			|| phdr->p_type == RENGUIN_PT_DYNAMIC) {
+			isDynamic = true;
+		}
+	}
+
+	// 4. Fallback brand, like FreeBSD's kern.elf64.fallback_brand, but
+	// scoped: a fully static, unmarked program (no PT_INTERP, no
+	// PT_DYNAMIC) that a Linux program executes is taken to be Linux too;
+	// static musl programs carry no marker. Haiku's own programs never
+	// match: Haiku links executables with -shared (buildtools
+	// gcc/config/i386/haiku64.h LINK_SPEC), so they have no PT_INTERP, but
+	// they always have PT_DYNAMIC (every one needs libroot.so). Programs
+	// started from Haiku are never affected.
+	if (!isDynamic && ehdr->e_type == RENGUIN_ET_EXEC
+		&& ehdr->e_ident[RENGUIN_EI_OSABI] == RENGUIN_ELFOSABI_SYSV
+		&& renguin_is_linux_team(args->team)) {
+		return B_OK;
 	}
 
 	return B_NOT_SUPPORTED;

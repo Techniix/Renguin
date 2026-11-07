@@ -32,6 +32,8 @@ enum {
 	SYS_openat = 257, SYS_mkdirat = 258, SYS_newfstatat = 262,
 	SYS_unlinkat = 263, SYS_readlinkat = 267, SYS_faccessat = 269,
 	SYS_dup3 = 292, SYS_pipe2 = 293, SYS_prlimit64 = 302, SYS_getrandom = 318,
+	SYS_clone = 56, SYS_fork = 57, SYS_vfork = 58, SYS_execve = 59,
+	SYS_wait4 = 61, SYS_kill = 62, SYS_exit = 60,
 };
 #define AT_FDCWD (-100)
 
@@ -45,9 +47,9 @@ static int seq(const char* a, const char* b)
 }
 
 /* Every program defines check_main(); this entry calls it and exits. */
-int check_main(void);
-__asm__(".globl _start\n_start:\n\txor %ebp, %ebp\n\tand $-16, %rsp\n"
-	"\tcall _start_c\n\thlt\n");
-void _start_c(void) { quit(check_main()); }
+int check_main(int argc, char** argv);
+__asm__(".globl _start\n_start:\n\txor %ebp, %ebp\n\tmov %rsp, %rdi\n"
+	"\tand $-16, %rsp\n\tcall _start_c\n\thlt\n");
+void _start_c(u64* sp) { quit(check_main((int)sp[0], (char**)(sp + 1))); }
 
 #endif

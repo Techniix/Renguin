@@ -5,6 +5,22 @@ against Haiku's real headers (section 0), and the test programs pass on real
 Linux, but the first boot is where real bugs will show up. These are the steps
 to get there. Please report what happens (section 8).
 
+**If you already applied an older version of the patch** to your Haiku
+checkout, put the checkout back first and apply the current one (your
+`UserBuildConfig` is not touched by this):
+
+```sh
+cd /path/to/haiku
+git checkout -- headers src
+rm -f headers/private/kernel/foreign_personality.h \
+      src/system/kernel/foreign_personality.cpp
+rm -rf src/add-ons/kernel/personalities
+git apply /path/to/renguin/patches/haiku/0001-kernel-foreign-ABI-personality-hooks.patch
+cp -r /path/to/renguin/haiku/src/add-ons/kernel/personalities src/add-ons/kernel/
+```
+
+Then rebuild: jam only recompiles what changed.
+
 **Short version:** apply the patch to a Haiku checkout, add one line to
 `UserBuildConfig`, build `haiku.vmdk`, boot it in VirtualBox, run
 `./run-tests.sh` in the test folder on the Desktop, and send back the output
@@ -135,7 +151,7 @@ library (`libc6-dev` on Debian/Ubuntu):
 ```sh
 cd /path/to/renguin/tests/linux/poc
 make                 # builds and brands everything
-./run-tests.sh .     # on Linux: 11 passed, 0 failed
+./run-tests.sh .     # on Linux: 12 passed, 0 failed
 ```
 
 | Program | What it exercises | Needs |
@@ -149,6 +165,7 @@ make                 # builds and brands everything
 | `mem` | `mmap`/`munmap`/`brk`/`uname` | brand |
 | `fileio` | open/read/write/seek/stat, `fcntl`, `dup3`, `pipe2`, `getdents64`, `getcwd`, mkdir/unlink, `/proc/self/exe` | brand |
 | `ids` | pids/tids, `prlimit64`, clocks, `nanosleep`, `getrandom`, `umask`, EFAULT on kernel pointers | brand |
+| `proc` | `fork`, glibc-style `clone`, `vfork`, `execve` (also of a `#!` script), `wait4` statuses, exec errors, a child killed by `SIGTERM` | brand |
 | `libc` | **real static glibc**: printf, malloc, stdio files, exit status | nothing (glibc marks it Linux) |
 | `libc-pie` | the same as a **static PIE** (ET_DYN, random load address) | nothing |
 
@@ -182,7 +199,7 @@ Open Terminal:
 ```sh
 cd ~/Desktop/renguin-tests
 ./hello ; echo $?            # expect: hello   then   42
-./run-tests.sh .             # expect: 11 passed, 0 failed
+./run-tests.sh .             # expect: 12 passed, 0 failed
 ./libc hi                    # expect: hello from libc, argc=2 hi  (exit 3)
 grep -i "renguin\|personalit" /var/log/syslog
 ```
@@ -231,9 +248,16 @@ $L/bin/busybox sha256sum /etc/passwd
 $L/bin/busybox pwd
 ```
 
-Expected limits right now: no `fork`/`clone`/`execve` yet, so anything that
-starts another program (`busybox sh -c ...`, `env`) fails with
-`unimplemented Linux syscall`. Signal handlers are accepted but never run.
+Process creation works now, so the shell is worth trying too:
+
+```sh
+$L/bin/busybox sh -c 'echo hi from ash; ls /etc | wc -l; uname -m'
+$L/bin/busybox env | head -3
+```
+
+Expected limits right now: no threads (`clone` with `CLONE_THREAD`), and
+signal handlers are accepted but never run, so an interactive shell's
+Ctrl-C handling and job control will misbehave.
 `ls /` shows the Linux root's `/`, as on FreeBSD; Haiku paths that don't exist
 in the Linux root (such as `/boot/home`) still resolve to Haiku's own.
 `/dev` always comes from Haiku.
@@ -296,7 +320,7 @@ to "not an executable". That is a handy way to boot past a broken module.
   assembles the patched `interrupts.S`.
 - `tools/check-syscall-numbers.py` checks all 90 dispatched syscall numbers
   against FreeBSD's `syscalls.master`.
-- All 11 test programs are built and pass on real Linux, establishing the
+- All 12 test programs are built and pass on real Linux, establishing the
   expected results; `strace` confirms every syscall they make is
   implemented.
 - **Not yet verified:** a full jam build with Haiku's cross-compiler, linking

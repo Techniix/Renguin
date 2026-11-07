@@ -6,8 +6,9 @@
 struct linux_stat { u64 dev, ino, nlink; unsigned mode, uid, gid, pad;
 	u64 rdev; i64 size, blksize, blocks, t[6], unused[3]; };
 
-int check_main(void)
+int check_main(int argc, char** argv)
 {
+	(void)argc; (void)argv;
 	static const char name[] = "renguin-fileio.tmp";
 	static const char data[] = "renguin file io\n";
 	char buf[512];
@@ -26,7 +27,7 @@ int check_main(void)
 	if (sys2(SYS_fstat, fd, &st) != 0) return 6;
 	if (st.size != sizeof(data) - 1) return 7;
 	if ((st.mode & 0170000) != 0100000) return 8;		/* S_IFREG */
-	if (sys6(SYS_pread64, fd, buf, 7, 8, 0, 0) != 7) return 9;
+	if (sys6(SYS_pread64, fd, (i64)buf, 7, 8, 0, 0) != 7) return 9;
 	if (buf[0] != 'f' || buf[6] != 'o') return 10;
 	if (sys3(SYS_lseek, fd, 0, 2) != sizeof(data) - 1) return 11;	/* END */
 	if (sys2(SYS_ftruncate, fd, 4) != 0) return 12;

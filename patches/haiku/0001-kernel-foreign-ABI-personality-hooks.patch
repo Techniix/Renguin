@@ -1,9 +1,9 @@
 diff --git a/headers/private/kernel/foreign_personality.h b/headers/private/kernel/foreign_personality.h
 new file mode 100644
-index 0000000..7f1c388
+index 0000000..832752d
 --- /dev/null
 +++ b/headers/private/kernel/foreign_personality.h
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,116 @@
 +/*
 + * Copyright 2026, Renguin contributors.
 + * Distributed under the terms of the MIT License.
@@ -45,7 +45,8 @@ index 0000000..7f1c388
 +struct foreign_exec_args {
 +	Team*			team;
 +	Thread*			thread;			// the team's main thread (the caller)
-+	const char*		path;
++	const char*		path;			// absolute, normalized path of the
++									// executable (symlinks resolved)
 +	char* const*	flat_args;		// kernel copy: arguments, NULL,
 +									// environment, NULL, then the strings
 +	uint32			arg_count;
@@ -277,10 +278,10 @@ index ba531e0..f605769 100644
  	X86PagingStructures* activePagingStructures
 diff --git a/src/system/kernel/foreign_personality.cpp b/src/system/kernel/foreign_personality.cpp
 new file mode 100644
-index 0000000..ab74796
+index 0000000..cb04c66
 --- /dev/null
 +++ b/src/system/kernel/foreign_personality.cpp
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,247 @@
 +/*
 + * Copyright 2026, Renguin contributors.
 + * Distributed under the terms of the MIT License.
@@ -304,6 +305,7 @@ index 0000000..ab74796
 +#include <syscalls.h>
 +#include <thread.h>
 +#include <util/AutoLock.h>
++#include <vfs.h>
 +
 +
 +//#define TRACE_FOREIGN_PERSONALITY
@@ -407,9 +409,25 @@ index 0000000..ab74796
 +		return B_NOT_SUPPORTED;
 +	}
 +
-+	// Read the start of the executable. Failures are left for the native
-+	// path to report, which yields the same errors as before.
-+	int fd = _kern_open(-1, path, O_RDONLY, 0);
++	// The path comes from userland as given to exec()/load_image() and may
++	// be relative to the team's working directory (libroot passes "./hello"
++	// through unchanged). Resolve it in the team's I/O context; _kern_open()
++	// below would otherwise resolve it against the kernel's. Failures are
++	// left for the native path to report, which yields the same errors as
++	// before.
++	char* normalizedPath = (char*)malloc(B_PATH_NAME_LENGTH);
++	if (normalizedPath == NULL) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++	MemoryDeleter normalizedPathDeleter(normalizedPath);
++	if (vfs_normalize_path(path, normalizedPath, B_PATH_NAME_LENGTH, true,
++			false) != B_OK) {
++		release_team_personality(team, thread);
++		return B_NOT_SUPPORTED;
++	}
++
++	int fd = _kern_open(-1, normalizedPath, O_RDONLY, 0);
 +	if (fd < 0) {
 +		release_team_personality(team, thread);
 +		return B_NOT_SUPPORTED;
@@ -426,7 +444,7 @@ index 0000000..ab74796
 +	foreign_exec_args args = {};
 +	args.team = team;
 +	args.thread = thread;
-+	args.path = path;
++	args.path = normalizedPath;
 +	args.flat_args = flatArgs;
 +	args.arg_count = argCount;
 +	args.env_count = envCount;
@@ -451,8 +469,9 @@ index 0000000..ab74796
 +
 +	TRACE("%s claimed \"%s\"\n", personality->abi_name, path);
 +
-+	if (team->personality != personality)
-+		release_team_personality(team, NULL);
++	// Drop the state of the program being replaced, also when it used the
++	// same personality: the new program gets fresh personality data.
++	release_team_personality(team, NULL);
 +	team->personality = personality;
 +	atomic_or(&thread->flags, THREAD_FLAGS_FOREIGN_ABI);
 +
@@ -503,6 +522,12 @@ index 0000000..ab74796
 +	}
 +
 +	personality->syscall(frame);
++
++	// As the native syscall path does after every call: the restarted flag
++	// is valid for exactly one call. Haiku's restartable _user_* functions,
++	// which personalities may call, read it to pick up saved parameters.
++	if ((thread->flags & THREAD_FLAGS_SYSCALL_RESTARTED) != 0)
++		atomic_and(&thread->flags, ~THREAD_FLAGS_SYSCALL_RESTARTED);
 +}
 diff --git a/src/system/kernel/team.cpp b/src/system/kernel/team.cpp
 index 91206d6..78d8e30 100644

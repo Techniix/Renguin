@@ -38,6 +38,7 @@
 #include <kimage.h>
 #include <team.h>
 #include <thread.h>
+#include <user_thread_defs.h>
 #include <util/Random.h>
 #include <vfs.h>
 #include <vm/vm.h>
@@ -781,6 +782,14 @@ renguin_enter_userspace(Thread* thread, addr_t entry, addr_t stackPointer)
 	// load_image() callers expect.
 	if (data != NULL && data->app_image >= 0)
 		_user_image_relocated(data->app_image);
+
+	// Initialize the thread's user_thread block, as Haiku's enter_userspace()
+	// does for native threads (thread.cpp). The kernel's signal code reads
+	// it, e.g. defer_signals. Linux programs never look at it.
+	if (thread->user_thread != NULL
+		&& user_memset(thread->user_thread, 0, sizeof(user_thread)) != B_OK) {
+		return B_BAD_ADDRESS;
+	}
 
 	// Linux entry state (linux_exec_setregs()): rsp -> argc, rdx = 0 (no
 	// dynamic-linker exit hook), all other general registers 0, FS/GS base 0,

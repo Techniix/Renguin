@@ -259,9 +259,45 @@ renguin_sys_openat(int dirfd, uint64 path, uint64 flags, uint64 mode)
 	if (status != B_OK)
 		return renguin_encode(status);
 
-	return renguin_encode(_user_open(dirfd, (const char*)(addr_t)hostPath,
+	int fd = _user_open(dirfd, (const char*)(addr_t)hostPath,
 		open_flags_to_haiku(flags),
-		(int)(mode & 07777 & ~renguin_current_umask())));
+		(int)(mode & 07777 & ~renguin_current_umask()));
+	if (fd < 0 && (flags & (LX_O_CREAT | LX_O_ACCMODE)) == 0) {
+		// Some file systems may refuse open() on a directory outright. A
+		// read-only open of a directory is always an open_dir() for us.
+		int dirFD = _user_open_dir(dirfd, (const char*)(addr_t)hostPath);
+		if (dirFD >= 0) {
+			if ((flags & LX_O_CLOEXEC) != 0)
+				_user_fcntl(dirFD, F_SETFD, FD_CLOEXEC);
+			return dirFD;
+		}
+	}
+	if (fd < 0)
+		return renguin_encode(fd);
+
+	// On Linux, any FD opened on a directory can be read with getdents64:
+	// that is how glibc's and musl's opendir() work. A Haiku FD opened with
+	// open() on a directory is a file FD without a read_dir hook. Turn it into
+	// a directory FD with the same number, exactly as Haiku's own fdopendir()
+	// does (src/system/libroot/posix/dirent.cpp).
+	struct stat st;
+	if ((flags & LX_O_CREAT) == 0
+		&& vfs_read_stat(fd, NULL, false, &st, false) == B_OK
+		&& S_ISDIR(st.st_mode)) {
+		int dirFD = _user_open_dir(fd, NULL);
+		if (dirFD < 0) {
+			_user_close(fd);
+			return renguin_encode(dirFD);
+		}
+		int result = _user_dup2(dirFD, fd,
+			(flags & LX_O_CLOEXEC) != 0 ? O_CLOEXEC : 0);
+		_user_close(dirFD);
+		if (result < 0) {
+			_user_close(fd);
+			return renguin_encode(result);
+		}
+	}
+	return fd;
 }
 
 

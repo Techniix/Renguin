@@ -77,7 +77,7 @@ AddFilesToHaikuImage system non-packaged add-ons kernel personalities
 # Renguin test programs, copied to ~/Desktop/renguin-tests. Build or unpack
 # them first (section 3). Arguments: target dir : source dir : new name.
 CopyDirectoryToHaikuImage home Desktop
-	: /path/to/renguin/tests/linux/poc : renguin-tests ;
+	: /path/to/renguin/tests/linux/prebuilt/renguin-tests : renguin-tests ;
 ```
 
 (Rule signatures from `build/jam/ImageRules`:
@@ -125,9 +125,9 @@ jam -q kernel_x86_64 renguin
 
 ## 3. Get the Linux test programs
 
-**Prebuilt:** use the `renguin-tests` archive from this session (all programs
-already built and branded). Unpack it into `tests/linux/poc/` before building
-the image, or copy it into the VM later.
+**Prebuilt:** `tests/linux/prebuilt/renguin-tests/` in this repository has
+every program already built and branded, plus `run-tests.sh`. Point
+`CopyDirectoryToHaikuImage` at that folder; no Linux toolchain needed.
 
 **Or build them** on any Linux x86-64 machine with gcc and glibc's static
 library (`libc6-dev` on Debian/Ubuntu):

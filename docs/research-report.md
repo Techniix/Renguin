@@ -485,6 +485,105 @@ This carries no `PT_INTERP`, no GNU note and `EI_OSABI` 0, so it exercises the e
 - [ ] Where should the Linux root live on disk, and what should the opt-in for static musl binaries look like (launcher, file attribute, or both)?
 - [ ] Is a Haiku x86-64 VM with serial console available for automated test runs?
 
+## 16. Findings during implementation (November 2026)
+
+Facts established while writing the Stage 4–5 code against Haiku `master`
+`fd8aec24` (2026-11-06). Each one changed the design. All are **\[V\]**, read
+from source.
+
+1. **Haiku's `_user_*` calls reject kernel buffers.** `_user_map_file()`
+   (`vm/vm.cpp`) requires its name and address arguments to be user pointers;
+   so do `_user_read_stat()` and `_user_read_link()` (`fs/vfs.cpp`, for the
+   stat buffer and the size pointer) and `_user_snooze_etc()` (`thread.cpp`,
+   for the remaining time). The first Stage 4 handlers passed kernel pointers
+   and would have failed with `B_BAD_ADDRESS` on every call. This settles the
+   **\[U\]** in section 7. Renguin now uses three techniques:
+   - Haiku's kernel-side entry points with `kernel = false` where they are
+     exported: `vfs_read_stat()`, `vm_create_anonymous_area()`.
+   - For file mappings, `dup_foreign_fd()` (`fs/fd.cpp`) moves the program's
+     FD into the kernel I/O context for `vm_map_file()`.
+   - Otherwise, scratch space in the calling thread's user stack below the
+     128-byte red zone (`usermem.cpp`), the region signal frames use. This is
+     the Haiku counterpart of FreeBSD passing `UIO_SYSSPACE` to its `kern_*`
+     functions.
+2. **`user_memcpy()` accepts kernel addresses.** `validate_memory_range()`
+   (`vm/vm.cpp`) only rejects ranges that straddle the user/kernel boundary;
+   Haiku's own syscalls check `IS_USER_ADDRESS()` first. Every Renguin
+   handler now goes through `renguin_copy_in()`/`renguin_copy_out()`, which do
+   the same checks (FreeBSD's `copyin()`/`copyout()`). The `ids` test checks
+   that kernel pointers get `EFAULT`.
+3. **Haiku's kernel does not apply `umask`.** libroot keeps it in userland
+   (`posix/sys/umask.c`, `__gUmask`) and masks modes itself
+   (`posix/fcntl.cpp`, `posix/sys/mkdir.c`). Linux programs never run libroot,
+   so Renguin keeps a per-team umask, seeded from the exec arguments.
+4. **`load_image()` waits for the loader.** With `B_WAIT_TILL_LOADED`
+   (`load_image_internal()` in `team.cpp`) the parent sleeps until
+   `notify_loading_app()` (`image.cpp`) runs, which runtime_loader triggers
+   through `_kern_image_relocated()` on the app image. A Linux program never
+   runs runtime_loader, so Tracker and other `load_image()` callers would have
+   hung. Renguin registers the executable as a `B_APP_IMAGE` and calls
+   `_user_image_relocated()` before entering userland.
+5. **Building an add-on does not put it in the image.** The image lists kernel
+   add-ons explicitly (`build/jam/packages/Haiku`). The module search order
+   (`kModulePaths` in `module.cpp`) is system, then system non-packaged, then
+   user add-ons, and safe mode's "disable user add-ons" skips the
+   non-packaged ones. Installing Renguin under
+   `/boot/system/non-packaged/add-ons/kernel/personalities/` (through
+   `UserBuildConfig`) makes module-only updates a file copy and gives a safe
+   way to boot without it.
+6. **Linux detection without branding.** Probing follows section 6 with one
+   change: a `PT_INTERP` that is not a known Linux interpreter falls through
+   to the OS/ABI byte and the `NT_GNU_ABI_TAG` note instead of rejecting.
+   That makes the unresolved runtime_loader-string question moot, and it
+   catches unusual Linux interpreters such as Nix's. Static glibc programs carry
+   `EI_OSABI = GNU` and the ABI note, so only libc-free and static musl
+   programs need `renguin-brand`.
+7. **Absolute symlinks in the Linux root.** Debian's
+   `/lib64/ld-linux-x86-64.so.2` is an absolute symlink. Haiku's VFS would
+   resolve it against the real root, so `path.cpp` walks paths component by
+   component inside the Linux root, as `linux_emul_convpath()` effectively
+   did. `/dev` is always Haiku's, standing in for FreeBSD's devfs mount at
+   `/compat/linux/dev`.
+8. **termios is mostly bit-compatible.** `c_iflag` and `c_oflag` bits match,
+   and `c_lflag` matches up to `TOSTOP`. `c_cflag` differs only in `CSIZE`,
+   the baud rates above 38400 and `CRTSCTS`. Haiku shares `VMIN`/`VTIME` with
+   `VEOF`/`VEOL` (`posix/termios.h`).
+9. **CPU-time clocks need `time_lock`.** `Team::CPUTime()` documents this
+   requirement; Renguin uses `user_timer_get_clock()` (`UserTimer.cpp`), which
+   takes the lock.
+
+10. **Exec paths arrive unresolved.** libroot passes the program path to
+    `_kern_exec()`/`_kern_load_image()` as the program gave it (`./hello`
+    stays relative). runtime_loader resolves it in userland. A kernel hook
+    must resolve it in the team's I/O context (`vfs_normalize_path(...,
+    kernel = false)`); `_kern_open()` would resolve it against the kernel's
+    root.
+11. **libroot's exec checks before the kernel.** `__test_executable()` asks
+    runtime_loader's `test_executable()` (`runtime_loader.cpp`), which
+    accepts any ELF64 file with a nonzero entry point (no OS/ABI check). So
+    Linux programs reach the kernel from Haiku shells, and `#!` scripts are a
+    libroot feature that Renguin has to provide for Linux programs.
+12. **Directories opened with `open()` can't be listed.** A Haiku FD from
+    `open()` on a directory uses `sFileOps`, whose `read_dir` is NULL
+    (`fs/vfs.cpp`). Haiku's own `fdopendir()` re-opens it with
+    `_kern_open_dir(fd, NULL)` and `dup2()`s it back; Renguin's `openat()`
+    does the same, so `opendir()` plus `getdents64` works.
+13. **What `fork()` needs from the kernel.** `fork_team()` copies the FS
+    base, the signal mask and the images, but not the personality. The
+    child's `enter_userspace()` would also reset the FS base
+    (`arch_thread_init_tls()`), write Haiku TLS slots 1 and 2 (glibc's `dtv`
+    and `self`), and leave signals deferred until libroot undefers them. The
+    patch's fork hook and the foreign-ABI case in `enter_userspace()` cover
+    all of this.
+14. **Haiku programs have no `PT_INTERP`.** Haiku links executables with
+    `-shared` (buildtools `gcc/config/i386/haiku64.h`, `LINK_SPEC`); the
+    kernel loads runtime_loader itself. All of them have `PT_DYNAMIC`
+    (libroot.so), which is what the scoped fallback brand relies on.
+15. **Restarted syscalls.** The native entry clears
+    `THREAD_FLAGS_SYSCALL_RESTARTED` after every call (`interrupts.S`);
+    restartable calls such as `_user_wait_for_child()` read it. The foreign
+    path now clears it too.
+
 ## Sources
 
 - FreeBSD source, commit `c502df9eb193`: [github.com/freebsd/freebsd-src](https://github.com/freebsd/freebsd-src/tree/main/sys/compat/linux)

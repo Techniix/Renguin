@@ -48,8 +48,17 @@ static foreign_personality_module_info sRenguinModule = {
 	renguin_load,
 	renguin_enter_userspace,
 	renguin_syscall,
-	renguin_team_released
+	renguin_team_released,
+	renguin_team_forked,
+	renguin_thread_entering_userspace
 };
+
+
+bool
+renguin_is_linux_team(Team* team)
+{
+	return team != NULL && team->personality == &sRenguinModule;
+}
 
 
 module_info* modules[] = {

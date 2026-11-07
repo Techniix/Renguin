@@ -154,7 +154,16 @@ section 13):
    testing with Alpine (musl) and Debian (glibc) userlands
 6. ⬜ Threads, futexes, epoll, `/proc`
 7. ⬜ Shells and command-line applications
-8. ⬜ GUI: GTK, Qt, SDL, D-Bus
+8. ⬜ GUI: GTK, Qt, SDL, D-Bus. Plan: Linux apps speak Wayland over a Unix
+   socket to a native Haiku Wayland server that turns it into Haiku windows,
+   building on X512's Haiku Wayland work and its socket transport. Needs
+   Unix sockets with `SCM_RIGHTS`, `memfd_create`/shared memory, `epoll`,
+   `eventfd`, threads and futexes. GPU acceleration comes later through a
+   Linux DRM driver (see the LinuxKPI sister project).
+
+Alongside these: **Renguin Manager**, a native Haiku app to install a Linux
+userland, show compatibility logs, and integrate with Tracker
+([plan](docs/manager-app.md)). Early parts can start before stage 5 is done.
 
 The long-term aim is for installing and running a Linux application on Haiku to
 feel as natural as running a native one, eventually reaching software shipped

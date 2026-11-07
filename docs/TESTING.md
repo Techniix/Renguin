@@ -5,6 +5,45 @@ against Haiku's real headers (section 0), and the test programs pass on real
 Linux, but the first boot is where real bugs will show up. These are the steps
 to get there. Please report what happens (section 8).
 
+## Quickest: install on your own Haiku machine with the script
+
+On an x86-64 Haiku machine with a Haiku source checkout, one script does
+everything: it updates Renguin, applies (or refreshes) the kernel patch,
+builds the patched `haiku` and `haiku_devel` packages and the module,
+installs them, and copies the test programs to your Desktop.
+
+```sh
+mkdir -p ~/renguin-build && cd ~/renguin-build
+git clone -b stage5-libc-dynamic https://github.com/Techniix/Renguin.git renguin
+git clone https://review.haiku-os.org/haiku.git haiku     # skip if you have it
+~/renguin-build/renguin/tools/haiku-test-install.sh
+```
+
+Then reboot and run the tests (section 5). Useful options:
+
+| Option | Use |
+| --- | --- |
+| `--haiku DIR` | your Haiku checkout, if it isn't `~/renguin-build/haiku` |
+| `--module-only` | after a module-only change: rebuild and install just the module, no packages |
+| `--yes` | don't ask before installing packages |
+| `--dry-run` | show what it would do |
+| `--revert` | remove the module and go back to the repository's system packages |
+
+Before changing anything, `pkgman` shows what it will install and asks.
+It should only replace `haiku` and `haiku_devel`. `haiku_devel` is pinned to
+the exact `haiku` version, so both are rebuilt together and your development
+setup keeps working. If it wants to remove anything else, answer no and
+send the log (`~/renguin-install.log`).
+
+If the machine doesn't boot afterwards: hold **Shift** (or press Space) at
+boot, choose **Select boot volume**, your disk, **Select state**, and pick the
+state from before the install. Haiku keeps it automatically.
+
+`tools/test-install-script.sh` tests the script itself on Linux, with fake
+Haiku tools.
+
+The rest of this guide is the manual route, building a separate VM image.
+
 **If you already applied an older version of the patch** to your Haiku
 checkout, put the checkout back first and apply the current one (your
 `UserBuildConfig` is not touched by this):

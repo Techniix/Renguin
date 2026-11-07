@@ -113,6 +113,8 @@ haiku/src/add-ons/kernel/personalities/renguin/
   usermem.cpp                  checked user-memory access, scratch space
   abi/                       Linux constants/tables generated from FreeBSD (BSD-2)
 tools/
+  haiku-test-install.sh      Builds and installs Renguin on a Haiku machine
+  test-install-script.sh     Tests that script on Linux with fake Haiku tools
   check-module.sh            Compiles everything against a Haiku checkout
   check-syscall-numbers.py   Checks syscall numbers against FreeBSD's table
   renguin-brand/             Marks a static ELF as Linux (EI_OSABI = 3)
@@ -124,7 +126,14 @@ tests/linux/poc/             Linux test programs (raw-syscall and glibc) +
 ## Quick start
 
 See **[docs/TESTING.md](docs/TESTING.md)** for the full build and test guide.
-In short:
+On a Haiku x86-64 machine, one script builds and installs everything:
+
+```sh
+~/renguin-build/renguin/tools/haiku-test-install.sh    # then reboot
+cd ~/Desktop/renguin-tests && ./run-tests.sh .
+```
+
+By hand, in short:
 
 ```sh
 # 1. Check the module against your Haiku checkout (seconds, on Linux).
